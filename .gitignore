@@ -1,2 +1,11 @@
 .venv
 taichi_cache*
+
+# Python cache files and directories
+*.pyc
+__pycache__/
+*/__pycache__/
+**/__pycache__/
+*.py[cod]
+*$py.class
+
