@@ -1,6 +1,6 @@
 """
 Integration test demonstrating how to run the simulation with all available solvers.
-Tests the interaction between different solvers and couplers in the simulation.
+Tests the interaction between different solvers, couplers, and scenarios in the simulation.
 """
 
 import logging
@@ -43,6 +43,9 @@ from couplers.fever_metabolic import FeverMetabolicCoupler
 from couplers.infection_hemogram import InfectionHemogramCoupler
 from couplers.coagulation_fluid import CoagulationFluidCoupler
 
+# Import scenarios
+from scenarios import FeverScenario, SepsisScenario
+
 
 def main():
     # Set logging level
@@ -75,9 +78,17 @@ def main():
         InfectionHemogramCoupler(),
         CoagulationFluidCoupler()
     ]
+    
+    # Create scenario objects with different parameters
+    scenarios = [
+        FeverScenario(peak_temp=39.2, onset_duration=1800, peak_duration=3600, resolution_duration=2700),  # Rapid onset fever
+        FeverScenario(peak_temp=40.5, onset_duration=3600, peak_duration=7200, resolution_duration=5400),  # High fever
+        SepsisScenario(severity=0.6, onset_duration=3600, duration=10800),  # Mild sepsis
+        SepsisScenario(severity=1.8, onset_duration=1800, duration=14400),  # Severe sepsis
+    ]
 
     # Create the master simulation
-    sim = Master(solvers=solvers, dt=1.0, couplers=couplers)
+    sim = Master(solvers=solvers, dt=1.0, couplers=couplers, scenarios=scenarios)
 
     # Run initial steps to establish baseline
     print("\n--- Running initial 5 steps ---")
@@ -85,89 +96,108 @@ def main():
         sim.step()
         print(f"\nStep {step_i+1} completed")
         print_vital_stats(sim)
-        
-    # Store baseline values to calculate relative changes
-    baseline = {}
-    for key in ["blood_pressure", "kidney_function", "fluid_volume", "tss_severity", "tissue_damage", "platelets", "wbc"]:
-        baseline[key] = sim.state.get(key, 0)
-
-    # Test various clinical scenarios
-    test_scenarios = [
-        {
-            "name": "Septic shock simulation",
-            "actions": {
-                "epinephrine": 5.0,  # Increase epinephrine
-                "fluid_volume": 1000.0,  # Add fluid
-                "tss_severity": 50.0,  # Increase severity
-                "tissue_damage": 40.0,  # Increase damage
-                "temperature": 39.2,   # Fever
-                "infection_level": 60.0  # Infection
-            }
-        },
-        {
-            "name": "Hemorrhagic shock",
-            "actions": {
-                "platelets": 80.0,        # Low platelets
-                "bleeding_rate": 10.0,    # Active bleeding
-                "inr": 1.8,               # Coagulopathy
-                "fluid_volume": -500.0    # Decrease fluid
-            }
-        },
-        {
-            "name": "Acute kidney injury",
-            "actions": {
-                # Set blood_pressure to around 60 by applying a relative change
-                "blood_pressure": baseline["blood_pressure"] - 90.0 if "blood_pressure" in baseline else -30.0,
-                "fluid_volume": -800.0,  # Decrease fluid
-                # Reduce kidney function to around 40% by applying a negative change
-                "kidney_function": -60.0  # Decrease function by 60%
-            }
-        },
-        {
-            "name": "Recovery phase",
-            "actions": {
-                "fluid_volume": 500.0,  # Add fluid
-                "epinephrine": -2.0,  # Decrease epinephrine
-                "tss_severity": -20.0,  # Decrease severity
-                "kidney_function": 20.0,  # Increase function by 20%
-                "platelets": 50.0,     # Improve platelets
-                "bleeding_rate": -5.0, # Reduce bleeding
-                "temperature": -0.8    # Reduce fever
-            }
-        }
-    ]
-
-    # Run through each scenario
-    for scenario in test_scenarios:
-        print(f"\n--- Testing scenario: {scenario['name']} ---")
-        
-        # Log the action values being applied for debugging
-        print("Applying actions:")
-        for key, value in scenario["actions"].items():
-            current = sim.state.get(key, "N/A")
-            if isinstance(current, (int, float)):
-                print(f"  {key}: current={current:.1f}, change={value:.1f}")
-            else:
-                print(f"  {key}: current={current}, change={value}")
-        
-        sim.actions(scenario["actions"])
-        
-        # Print state immediately after actions are applied
-        print("\nState immediately after actions:")
+    
+    # Test various clinical scenarios using both direct actions and scenarios
+    
+    # First, demonstrate immediate actions (medications, procedures)
+    print("\n--- Testing immediate actions ---")
+    print("Applying fluid bolus and vasopressor")
+    
+    actions = {
+        "fluid_volume": 500.0,  # Add 500mL of fluid
+        "epinephrine": 2.0,     # Start epinephrine infusion
+        "sedation_level": 3.0   # Moderate sedation
+    }
+    
+    sim.actions(actions)
+    
+    # Print state immediately after actions are applied
+    print("\nState immediately after actions:")
+    print_vital_stats(sim)
+    
+    # Simulate a few steps to allow actions to take effect
+    for step_i in range(5):
+        sim.step()
+        print(f"\nStep {step_i+1} after actions")
         print_vital_stats(sim)
+    
+    # Now use the scenario system for complex, time-evolving conditions
+    print("\n--- Testing mild fever scenario ---")
+    sim.apply_scenario("Fever")  # Activate the first fever scenario
+    
+    # Run simulation with active scenario
+    for step_i in range(10):
+        sim.step()
+        print(f"\nStep {step_i+1} with mild fever scenario")
+        print_vital_stats(sim)
+        # Show active scenarios
+        print(f"Active scenarios: {[s.name for s in sim.active_scenarios]}")
         
-        for step_i in range(5):
-            sim.step()
-            print(f"\nStep {step_i+1} after {scenario['name']}")
-            print_vital_stats(sim)
+    # Deactivate fever and activate sepsis
+    sim.deactivate_scenario("Fever")
+    print("\n--- Testing severe sepsis scenario ---")
+    
+    # Use the severe sepsis scenario (second in the list)
+    sim.apply_scenario("Sepsis")
+    
+    # Run simulation with active scenario
+    for step_i in range(20):
+        sim.step()
+        print(f"\nStep {step_i+1} with severe sepsis scenario")
+        print_vital_stats(sim)
+        # Show active scenarios
+        print(f"Active scenarios: {[s.name for s in sim.active_scenarios]}")
+        
+        # Apply treatment actions during sepsis
+        if step_i == 10:  # Apply treatment halfway through
+            print("\n--- Applying treatment actions during sepsis ---")
+            treatment_actions = {
+                "fluid_volume": 1000.0,  # Fluid resuscitation
+                "epinephrine": 5.0,      # Increase vasopressors
+                "antibiotics": 10.0      # Add antibiotics
+            }
+            sim.actions(treatment_actions)
+    
+    # Test having multiple scenarios active simultaneously
+    print("\n--- Testing multiple concurrent scenarios ---")
+    sim.apply_scenario("Fever")  # Add fever on top of sepsis
+    
+    for step_i in range(10):
+        sim.step()
+        print(f"\nStep {step_i+1} with multiple scenarios")
+        print_vital_stats(sim)
+        # Show active scenarios
+        print(f"Active scenarios: {[s.name for s in sim.active_scenarios]}")
+    
+    # Deactivate all scenarios and return to baseline
+    for scenario in list(sim.active_scenarios):
+        sim.deactivate_scenario(scenario.name)
+    
+    print("\n--- Returning to baseline ---")
+    recovery_actions = {
+        "fluid_volume": 500.0,  # Add more fluid
+        "epinephrine": -5.0,    # Decrease vasopressors
+        "antibiotics": 5.0,     # Continue antibiotics
+        "lactate": -2.0,        # Decreasing lactate
+        "crp": -150.0           # Decreasing CRP
+    }
+    sim.actions(recovery_actions)
+    
+    for step_i in range(5):
+        sim.step()
+        print(f"\nStep {step_i+1} recovery phase")
+        print_vital_stats(sim)
 
 
 def print_vital_stats(sim):
     """Print key physiological parameters from the simulation."""
     stats = [
         ("Heart Rate", "heart_rate", "bpm"),
-        ("Blood Pressure", "blood_pressure", "mmHg"),
+        ("Systolic BP", "systolic_bp", "mmHg"),
+        ("Diastolic BP", "diastolic_bp", "mmHg"),
+        ("Mean Arterial Pressure", "blood_pressure", "mmHg"),  # Now labeled as MAP for clarity
         ("Oxygen Saturation", "oxygen_saturation", "%"),
+        ("Body Temperature", "body_temperature", "°C"),
         ("Fluid Volume", "fluid_volume", "mL"),
         ("TSS Severity", "tss_severity", "%"),
         ("Tissue Damage", "tissue_damage", "%"),
@@ -175,7 +205,6 @@ def print_vital_stats(sim):
         ("Immune Response", "immune_response", "%"),
         ("Kidney Function", "kidney_function", "%"),
         ("Urine Output", "urine_output", "mL/hr"),
-        ("Temperature", "temperature", "°C"),
         ("Metabolic Rate", "metabolic_rate", "x"),
         ("Lactate", "lactate", "mmol/L"),
         ("WBC", "wbc", "K/µL"),
@@ -187,7 +216,8 @@ def print_vital_stats(sim):
         ("Infection Level", "infection_level", "%"),
         ("Sodium", "sodium", "mEq/L"),
         ("Potassium", "potassium", "mEq/L"),
-        ("Epinephrine", "epinephrine", "µg/min")
+        ("Epinephrine", "epinephrine", "µg/min"),
+        ("Respiratory Rate", "respiratory_rate", "breaths/min"),
     ]
     
     for name, key, unit in stats:
