@@ -41,7 +41,7 @@ class FeverScenario(Scenario):
     @property
     def duration(self) -> float:
         # Total duration of the scenario
-        return self.onset_duration + self.peak_duration + self.resolution_duration
+        return float(self.onset_duration + self.peak_duration + self.resolution_duration)
     
     @property
     def initial_state(self) -> dict:

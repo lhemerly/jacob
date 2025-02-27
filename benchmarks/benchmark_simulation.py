@@ -1,5 +1,5 @@
 """
-Benchmark script for testing simulation performance with all available solvers.
+Benchmark script for testing simulation performance with all available solvers and actions.
 Tests parallel simulation instances to measure throughput and performance.
 """
 
@@ -41,6 +41,9 @@ from couplers.coagulation_fluid import CoagulationFluidCoupler
 # Import scenarios
 from scenarios import FeverScenario, SepsisScenario
 
+# Import actions
+from actions import BloodTestAction, MEDICATIONS, FLUIDS
+
 # Configuration for benchmark
 NUM_SIMULATIONS = 50      # Number of parallel simulation instances
 N_STEPS = 1000           # Number of simulation steps per instance
@@ -49,41 +52,69 @@ N_STEPS = 1000           # Number of simulation steps per instance
 BENCHMARK_CONFIGS = [
     {
         "name": "Baseline",
-        "actions": {},
+        "legacy_actions": {},
+        "actions": [],
         "scenarios": []
     },
     {
-        "name": "Actions Only",
-        "actions": {
+        "name": "Blood Test Only",
+        "legacy_actions": {},
+        "actions": ["Blood Test"],
+        "scenarios": []
+    },
+    {
+        "name": "Medications Only",
+        "legacy_actions": {},
+        "actions": ["Epinephrine", "Antibiotics"],
+        "scenarios": []
+    },
+    {
+        "name": "Fluids Only",
+        "legacy_actions": {},
+        "actions": ["Normal Saline Administration", "Lactated Ringer's Administration"],
+        "scenarios": []
+    },
+    {
+        "name": "Multiple Actions",
+        "legacy_actions": {},
+        "actions": ["Blood Test", "Norepinephrine", "Morphine", "D5W Administration"],
+        "scenarios": []
+    },
+    {
+        "name": "Legacy Actions",
+        "legacy_actions": {
             "epinephrine": 5.0,
             "fluid_volume": 1000.0,
             "tss_severity": 50.0,
             "tissue_damage": 40.0
         },
+        "actions": [],
         "scenarios": []
     },
     {
         "name": "Fever Scenario",
-        "actions": {},
+        "legacy_actions": {},
+        "actions": [],
         "scenarios": ["Fever"]
     },
     {
-        "name": "Sepsis Scenario",
-        "actions": {},
+        "name": "Sepsis Scenario with Actions",
+        "legacy_actions": {},
+        "actions": ["Antibiotics", "Normal Saline Administration"],
         "scenarios": ["Sepsis"]
     },
     {
-        "name": "Multiple Scenarios",
-        "actions": {
-            "fluid_volume": 500.0,  # Add some fluid resuscitation
-            "epinephrine": 3.0      # Add some vasopressor support
+        "name": "Complex Clinical Scenario",
+        "legacy_actions": {
+            "tissue_damage": 20.0  # Some baseline tissue damage
         },
+        "actions": ["Blood Test", "Norepinephrine", "Lactated Ringer's Administration"],
         "scenarios": ["Fever", "Sepsis"]  # Both scenarios active simultaneously
     }
 ]
 
 def create_simulation():
-    """Create a simulation instance with all solvers."""
+    """Create a simulation instance with all solvers, couplers, scenarios and actions."""
     solvers = [
         PressureHROxySolver(),
         MedsSolver(),
@@ -116,7 +147,13 @@ def create_simulation():
         SepsisScenario(severity=1.5, onset_duration=3600, duration=14400)
     ]
     
-    return Master(solvers=solvers, dt=1.0, couplers=couplers, scenarios=scenarios)
+    # Create action objects
+    blood_test = BloodTestAction()
+    medication_actions = list(MEDICATIONS.values())
+    fluid_actions = list(FLUIDS.values())
+    actions = [blood_test] + medication_actions + fluid_actions
+    
+    return Master(solvers=solvers, dt=1.0, couplers=couplers, scenarios=scenarios, actions=actions)
 
 def run_simulation(sim_id):
     """Run a single simulation instance."""
@@ -140,9 +177,13 @@ def run_simulation(sim_id):
         # This ensures each benchmark configuration starts from a clean state
         sim = create_simulation()
         
-        # Apply actions specified in the configuration
-        if config["actions"]:
-            sim.actions(config["actions"])
+        # Apply legacy actions (direct state modifications) specified in the configuration
+        if config["legacy_actions"]:
+            sim.actions(config["legacy_actions"])
+        
+        # Apply new action objects
+        for action_name in config["actions"]:
+            sim.perform_action_by_name(action_name)
         
         # Activate scenarios specified in the configuration
         for scenario_name in config["scenarios"]:

@@ -1,7 +1,7 @@
 import logging
 import taichi as ti
-from typing import List, Optional, Dict
-from classes import Solver, Coupler, Scenario
+from typing import List, Optional, Dict, Any
+from classes import Solver, Coupler, Scenario, Action
 
 # Initialize Taichi with CPU/GPU backend
 ti.init(arch=ti.cpu)  # Can be changed to ti.gpu if needed
@@ -20,18 +20,22 @@ class Master:
 
     def __init__(self, solvers: List[Solver], dt: float = 1.0, 
                  couplers: Optional[List[Coupler]] = None,
-                 scenarios: Optional[List[Scenario]] = None):
+                 scenarios: Optional[List[Scenario]] = None,
+                 actions: Optional[List[Action]] = None):
         """
         :param solvers: list of Solver instances
         :param dt: default timestep
         :param couplers: list of Coupler instances for handling interactions between solvers
         :param scenarios: list of Scenario instances that can be activated
+        :param actions: list of Action instances that can be performed
         """
         self.logger = logging.getLogger(self.__class__.__name__)
         self.solvers = solvers
         self.couplers = couplers or []
         self.scenarios = scenarios or []
+        self.actions = actions or []
         self.active_scenarios = []
+        self.active_actions = []  # Track actions with duration > 0
         self.state = {}
         self.dt = dt  # can be float
         self.current_time = 0.0
@@ -130,6 +134,9 @@ class Master:
 
         # Apply active scenarios
         self._apply_scenarios()
+        
+        # Apply ongoing effects from active actions
+        self._apply_active_actions()
 
         self.current_time += self.dt
         self.logger.info(str(self))
@@ -158,6 +165,37 @@ class Master:
             if not scenario.is_active:
                 self.active_scenarios.remove(scenario)
                 self.logger.info(f"Scenario {scenario.name} has completed")
+                
+    def _apply_active_actions(self):
+        """
+        Apply ongoing effects from actions with duration > 0.
+        Remove actions that have completed their duration.
+        """
+        # Create a copy of the list since we might modify it during iteration
+        active_actions_copy = list(self.active_actions)
+        
+        for action_data in active_actions_copy:
+            action = action_data["action"]
+            elapsed_time = action_data["elapsed_time"]
+            duration = action.duration
+            kwargs = action_data.get("kwargs", {})
+            
+            # Update elapsed time
+            elapsed_time += self.dt
+            action_data["elapsed_time"] = elapsed_time
+            
+            # Check if action duration has completed
+            if elapsed_time >= duration:
+                self.active_actions.remove(action_data)
+                self.logger.info(f"Action {action.name} has completed its duration")
+                continue
+            
+            # For actions with ongoing effects, we apply a fraction of the initial effect
+            # based on remaining duration
+            remaining_fraction = (duration - elapsed_time) / duration
+            
+            # Apply action effects adjusted by remaining fraction
+            self._apply_action_changes(action, kwargs, remaining_fraction)
 
     def apply_scenario(self, scenario_name: str):
         """
@@ -196,6 +234,72 @@ class Master:
         
         self.logger.warning(f"Active scenario {scenario_name} not found")
         return False
+        
+    def perform_action(self, action: Action, **kwargs) -> Dict[str, Any]:
+        """
+        Perform an action and apply its effects to the state.
+        If the action has a duration > 0, it will be added to active_actions
+        to continue its effects over time.
+        
+        :param action: The Action instance to perform
+        :param kwargs: Additional parameters specific to this action
+        :return: Dictionary of observable state values after performing the action
+        """
+        # Apply immediate effects of the action
+        changes = self._apply_action_changes(action, kwargs)
+        
+        # If the action has duration > 0, add it to active_actions
+        if action.duration > 0:
+            self.active_actions.append({
+                "action": action,
+                "elapsed_time": 0.0,
+                "kwargs": kwargs
+            })
+            self.logger.info(f"Action {action.name} with duration {action.duration:.2f} added to active actions")
+        
+        # Get observable state after action
+        observable_state = action.get_observable_state(self.state)
+        
+        self.logger.info(f"Action {action.name} performed with changes: {changes}")
+        return observable_state
+    
+    def perform_action_by_name(self, action_name: str, **kwargs) -> Dict[str, Any]:
+        """
+        Find an action by name and perform it.
+        
+        :param action_name: Name of the action to perform
+        :param kwargs: Additional parameters specific to this action
+        :return: Dictionary of observable state values after performing the action, empty if action not found
+        """
+        for action in self.actions:
+            if action.name == action_name:
+                return self.perform_action(action, **kwargs)
+                
+        self.logger.warning(f"Action {action_name} not found")
+        return {}
+    
+    def _apply_action_changes(self, action: Action, kwargs: Dict[str, Any], multiplier: float = 1.0) -> Dict[str, float]:
+        """
+        Apply the effects of an action to the state, with an optional multiplier.
+        
+        :param action: The Action instance
+        :param kwargs: Additional parameters specific to this action
+        :param multiplier: Multiplier for the action effects (used for decaying effects)
+        :return: Dictionary of changes applied
+        """
+        changes = action.apply(self.state, **kwargs)
+        
+        # Apply changes to the state with multiplier
+        for key, delta in changes.items():
+            adjusted_delta = delta * multiplier
+            if key in self.state:
+                self.state[key] += adjusted_delta
+            else:
+                # Add the key with the specified value
+                self.state[key] = adjusted_delta
+                self.logger.info(f"Created new state key from action: {key} = {adjusted_delta}")
+                
+        return changes
 
     def actions(self, actions: Dict[str, float]):
         """
@@ -226,4 +330,5 @@ class Master:
         """
         state_str = ", ".join([f"{k}={v:.2f}" for k, v in self.state.items()])
         active_scenarios = ", ".join([s.name for s in self.active_scenarios]) if self.active_scenarios else "None"
-        return f"Time={self.current_time:.2f}, Active Scenarios: {active_scenarios}, State: {state_str}"
+        active_actions = ", ".join([a["action"].name for a in self.active_actions]) if self.active_actions else "None"
+        return f"Time={self.current_time:.2f}, Active Scenarios: {active_scenarios}, Active Actions: {active_actions}, State: {state_str}"

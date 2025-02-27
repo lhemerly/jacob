@@ -43,7 +43,7 @@ class SepsisScenario(Scenario):
     @property
     def duration(self) -> float:
         # Total duration of the scenario
-        return self.total_duration
+        return float(self.total_duration)
     
     @property
     def initial_state(self) -> dict:

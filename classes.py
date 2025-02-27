@@ -97,6 +97,76 @@ class Coupler(ABC):
         return parsed_state
 
 
+class Action(ABC):
+    """
+    Base interface/abstract class for clinical actions or procedures.
+    Actions represent discrete interventions that have immediate and/or 
+    delayed effects on the patient state.
+    """
+    
+    @property
+    @abstractmethod
+    def name(self) -> str:
+        """
+        The name of the action.
+        """
+        pass
+    
+    @property
+    @abstractmethod
+    def description(self) -> str:
+        """
+        Description of the action.
+        """
+        pass
+    
+    @property
+    @abstractmethod
+    def affected_keys(self) -> list:
+        """
+        The dictionary keys that this action may modify in the global state.
+        """
+        pass
+    
+    @property
+    def required_keys(self) -> list:
+        """
+        The dictionary keys that this action requires from the global state.
+        Optional method, returns empty list by default.
+        """
+        return []
+    
+    @property
+    def duration(self) -> float:
+        """
+        The duration of the action's effects in simulation time.
+        Default is immediate (represented by 0).
+        Override this in derived classes for actions with sustained effects.
+        """
+        return 0  # 0 represents immediate action
+    
+    @abstractmethod
+    def apply(self, state: dict, **kwargs) -> dict:
+        """
+        Apply the action's effects to the state.
+        
+        :param state: The global state dictionary
+        :param kwargs: Additional parameters specific to this action
+        :return: Dictionary of state changes to apply
+        """
+        pass
+    
+    def get_observable_state(self, state: dict) -> dict:
+        """
+        Return the subset of the state that would be observable after performing this action.
+        For example, a blood test action would reveal hemogram values.
+        
+        :param state: The global state dictionary
+        :return: Dictionary of observable state values
+        """
+        return {}
+
+
 class Scenario(ABC):
     """
     Base interface/abstract class for all simulation scenarios.
