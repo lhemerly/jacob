@@ -55,8 +55,8 @@ class HemorrhageScenario(Scenario):
     def duration(self) -> float:
         # If no spontaneous recovery, scenario continues indefinitely
         if not self.spontaneous_recovery:
-            return -1
-        return self.recovery_threshold + self.recovery_duration
+            return float(-1)
+        return float(self.recovery_threshold + self.recovery_duration)
     
     @property
     def initial_state(self) -> dict:
