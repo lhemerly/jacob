@@ -38,47 +38,47 @@ from couplers.fever_metabolic import FeverMetabolicCoupler
 from couplers.infection_hemogram import InfectionHemogramCoupler
 from couplers.coagulation_fluid import CoagulationFluidCoupler
 
+# Import scenarios
+from scenarios import FeverScenario, SepsisScenario
+
 # Configuration for benchmark
 NUM_SIMULATIONS = 50      # Number of parallel simulation instances
 N_STEPS = 1000           # Number of simulation steps per instance
-SCENARIOS = [
+
+# Benchmark configurations
+BENCHMARK_CONFIGS = [
     {
         "name": "Baseline",
-        "actions": {}
+        "actions": {},
+        "scenarios": []
     },
     {
-        "name": "Septic shock",
+        "name": "Actions Only",
         "actions": {
             "epinephrine": 5.0,
             "fluid_volume": 1000.0,
             "tss_severity": 50.0,
             "tissue_damage": 40.0
-        }
+        },
+        "scenarios": []
     },
     {
-        "name": "Renal failure",
-        "actions": {
-            "blood_pressure": -30.0,  # Decrease blood pressure
-            "kidney_function": -60.0  # Decrease function by 60%
-        }
+        "name": "Fever Scenario",
+        "actions": {},
+        "scenarios": ["Fever"]
     },
     {
-        "name": "Hemorrhagic shock",
-        "actions": {
-            "platelets": 80.0,        # Reduced platelets
-            "bleeding_rate": 10.0,    # Active bleeding
-            "inr": 1.8,              # Coagulopathy
-            "fluid_volume": 1500.0    # Volume depletion
-        }
+        "name": "Sepsis Scenario",
+        "actions": {},
+        "scenarios": ["Sepsis"]
     },
     {
-        "name": "Severe infection",
+        "name": "Multiple Scenarios",
         "actions": {
-            "infection_level": 70.0,  # Severe infection
-            "temperature": 39.5,      # High fever
-            "wbc": 15.0,             # Elevated WBC
-            "crp": 180.0             # Elevated CRP
-        }
+            "fluid_volume": 500.0,  # Add some fluid resuscitation
+            "epinephrine": 3.0      # Add some vasopressor support
+        },
+        "scenarios": ["Fever", "Sepsis"]  # Both scenarios active simultaneously
     }
 ]
 
@@ -110,7 +110,13 @@ def create_simulation():
         CoagulationFluidCoupler()
     ]
     
-    return Master(solvers=solvers, dt=1.0, couplers=couplers)
+    # Create scenario objects with different parameters
+    scenarios = [
+        FeverScenario(peak_temp=39.5, onset_duration=3600, peak_duration=7200, resolution_duration=5400),
+        SepsisScenario(severity=1.5, onset_duration=3600, duration=14400)
+    ]
+    
+    return Master(solvers=solvers, dt=1.0, couplers=couplers, scenarios=scenarios)
 
 def run_simulation(sim_id):
     """Run a single simulation instance."""
@@ -125,13 +131,22 @@ def run_simulation(sim_id):
             print("Running with CPU (GPU not available)")
 
     sim = create_simulation()
-    scenario_times = {}
+    config_times = {}
     
-    for scenario in SCENARIOS:
+    for config in BENCHMARK_CONFIGS:
         start = time.time()
         
-        # Apply scenario actions
-        sim.actions(scenario["actions"])
+        # Reset the simulation instance by creating a new one
+        # This ensures each benchmark configuration starts from a clean state
+        sim = create_simulation()
+        
+        # Apply actions specified in the configuration
+        if config["actions"]:
+            sim.actions(config["actions"])
+        
+        # Activate scenarios specified in the configuration
+        for scenario_name in config["scenarios"]:
+            sim.apply_scenario(scenario_name)
         
         # Run simulation steps
         for _ in range(N_STEPS):
@@ -142,38 +157,38 @@ def run_simulation(sim_id):
         simulated_time = N_STEPS * sim.dt
         speedup = simulated_time / real_time if real_time > 0 else float('inf')
         
-        scenario_times[scenario["name"]] = (simulated_time, real_time, speedup)
+        config_times[config["name"]] = (simulated_time, real_time, speedup)
     
-    return scenario_times
+    return config_times
 
 def main():
     print(f"Running {NUM_SIMULATIONS} parallel simulations")
-    print(f"Testing {len(SCENARIOS)} scenarios with {N_STEPS} steps each")
+    print(f"Testing {len(BENCHMARK_CONFIGS)} configurations with {N_STEPS} steps each")
     
     overall_start = time.time()
     
     with concurrent.futures.ProcessPoolExecutor() as executor:
         futures = [executor.submit(run_simulation, i) for i in range(NUM_SIMULATIONS)]
         
-        # Aggregate results by scenario
-        scenario_results = {scenario["name"]: [] for scenario in SCENARIOS}
+        # Aggregate results by configuration
+        config_results = {config["name"]: [] for config in BENCHMARK_CONFIGS}
         
         for future in concurrent.futures.as_completed(futures):
-            scenario_times = future.result()
-            for scenario_name, (sim_time, real_time, speedup) in scenario_times.items():
-                scenario_results[scenario_name].append(speedup)
+            config_times = future.result()
+            for config_name, (sim_time, real_time, speedup) in config_times.items():
+                config_results[config_name].append(speedup)
     
     overall_end = time.time()
     overall_time = overall_end - overall_start
     
-    # Print results for each scenario
+    # Print results for each configuration
     print("\nBenchmark Results:")
     print("-" * 50)
-    for scenario_name, speedups in scenario_results.items():
+    for config_name, speedups in config_results.items():
         avg_speedup = sum(speedups) / len(speedups)
         min_speedup = min(speedups)
         max_speedup = max(speedups)
-        print(f"\nScenario: {scenario_name}")
+        print(f"\nConfiguration: {config_name}")
         print(f"  Average speedup: {avg_speedup:.2f}x real-time")
         print(f"  Min speedup: {min_speedup:.2f}x")
         print(f"  Max speedup: {max_speedup:.2f}x")

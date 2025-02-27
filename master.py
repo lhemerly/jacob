@@ -1,7 +1,7 @@
 import logging
 import taichi as ti
-from typing import List, Optional
-from classes import Solver, Coupler
+from typing import List, Optional, Dict
+from classes import Solver, Coupler, Scenario
 
 # Initialize Taichi with CPU/GPU backend
 ti.init(arch=ti.cpu)  # Can be changed to ti.gpu if needed
@@ -13,19 +13,25 @@ class Master:
     The master simulation class.
     - Maintains a single global state dictionary.
     - Each step, it delegates to solvers in sequence and couplers.
+    - Allows applying scenarios that unfold over time.
     - Uses Taichi for parallel computation.
     - We unify logging and track a simple time.
     """
 
-    def __init__(self, solvers: List[Solver], dt: float = 1.0, couplers: Optional[List[Coupler]] = None):
+    def __init__(self, solvers: List[Solver], dt: float = 1.0, 
+                 couplers: Optional[List[Coupler]] = None,
+                 scenarios: Optional[List[Scenario]] = None):
         """
         :param solvers: list of Solver instances
         :param dt: default timestep
         :param couplers: list of Coupler instances for handling interactions between solvers
+        :param scenarios: list of Scenario instances that can be activated
         """
         self.logger = logging.getLogger(self.__class__.__name__)
         self.solvers = solvers
         self.couplers = couplers or []
+        self.scenarios = scenarios or []
+        self.active_scenarios = []
         self.state = {}
         self.dt = dt  # can be float
         self.current_time = 0.0
@@ -40,6 +46,9 @@ class Master:
         
         # Initialize state with default values from couplers
         self._initialize_coupler_state()
+        
+        # Initialize state with default values from scenarios
+        self._initialize_scenario_state()
 
         self.logger.info("Master initialized. Known keys: %s", list(self.state.keys()))
         
@@ -60,6 +69,21 @@ class Master:
                 if key not in self.state:
                     self.state[key] = value
                     self.logger.info(f"Added default value for {key}: {value} from {coupler.__class__.__name__}")
+    
+    def _initialize_scenario_state(self):
+        """
+        Initialize state with default values from each scenario's initial_state.
+        Only adds values for keys that don't already exist in the state.
+        """
+        for scenario in self.scenarios:
+            # Get initial state values defined by each scenario
+            scenario_default_state = scenario.initial_state
+            
+            # Only add default values if they don't already exist in state
+            for key, value in scenario_default_state.items():
+                if key not in self.state:
+                    self.state[key] = value
+                    self.logger.info(f"Added default value for {key}: {value} from scenario {scenario.name}")
 
     def _validate_couplers(self):
         """
@@ -78,6 +102,7 @@ class Master:
         """
         Progress the simulation by dt, letting each solver update its part of the state
         and then applying couplers for interactions between solvers.
+        Also applies active scenarios.
         Uses Taichi for parallelism where possible.
         """
         # Parallel solver step - prepare data structures
@@ -103,17 +128,85 @@ class Master:
                 if key in coupled_state:
                     self.state[key] = coupled_state[key]
 
+        # Apply active scenarios
+        self._apply_scenarios()
+
         self.current_time += self.dt
         self.logger.info(str(self))
         return self.state
-
-    def actions(self, actions: dict):
+    
+    def _apply_scenarios(self):
         """
-        Perform state changes according to an actions dictionary.
+        Apply all active scenarios to the state.
+        Remove scenarios that have completed.
+        """
+        # Create a copy of the list since we might modify it during iteration
+        for scenario in list(self.active_scenarios):
+            # Apply scenario effects
+            changes = scenario.update(self.state, self.dt)
+            
+            # Apply changes to the state
+            for key, value in changes.items():
+                if key in self.state:
+                    self.state[key] = value
+                else:
+                    # Add the key with the specified value
+                    self.state[key] = value
+                    self.logger.info(f"Created new state key from scenario: {key} = {value}")
+            
+            # Remove scenario if it's no longer active
+            if not scenario.is_active:
+                self.active_scenarios.remove(scenario)
+                self.logger.info(f"Scenario {scenario.name} has completed")
+
+    def apply_scenario(self, scenario_name: str):
+        """
+        Activate a scenario by name.
+        
+        :param scenario_name: The name of the scenario to activate
+        :return: True if scenario was found and activated, False otherwise
+        """
+        for scenario in self.scenarios:
+            if scenario.name == scenario_name:
+                if scenario not in self.active_scenarios:
+                    scenario.activate()
+                    self.active_scenarios.append(scenario)
+                    self.logger.info(f"Scenario {scenario_name} activated")
+                    return True
+                else:
+                    self.logger.warning(f"Scenario {scenario_name} is already active")
+                    return True
+        
+        self.logger.warning(f"Scenario {scenario_name} not found")
+        return False
+
+    def deactivate_scenario(self, scenario_name: str):
+        """
+        Deactivate a scenario by name.
+        
+        :param scenario_name: The name of the scenario to deactivate
+        :return: True if scenario was found and deactivated, False otherwise
+        """
+        for scenario in self.active_scenarios:
+            if scenario.name == scenario_name:
+                scenario.deactivate()
+                self.active_scenarios.remove(scenario)
+                self.logger.info(f"Scenario {scenario_name} deactivated")
+                return True
+        
+        self.logger.warning(f"Active scenario {scenario_name} not found")
+        return False
+
+    def actions(self, actions: Dict[str, float]):
+        """
+        Perform immediate state changes according to an actions dictionary.
+        For user/model actions like medications, pacemaker configurations, procedures, etc.
+        
         Example:
         actions = {"heart_rate": +5, "blood_pressure": -1.2}
-        If a key is missing, initialize it with the value rather than attempting
-        to increment a nonexistent value.
+        
+        :param actions: Dictionary of state keys and their delta values (or absolute values for new keys)
+        :return: Updated global state
         """
         for key, value in actions.items():
             if key in self.state:
@@ -132,4 +225,5 @@ class Master:
         Pretty-print the current simulation time and all global state.
         """
         state_str = ", ".join([f"{k}={v:.2f}" for k, v in self.state.items()])
-        return f"Time={self.current_time:.2f}, State: {state_str}"
+        active_scenarios = ", ".join([s.name for s in self.active_scenarios]) if self.active_scenarios else "None"
+        return f"Time={self.current_time:.2f}, Active Scenarios: {active_scenarios}, State: {state_str}"
