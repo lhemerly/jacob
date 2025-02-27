@@ -4,7 +4,7 @@ from classes import Solver, State
 logger = logging.getLogger(__name__)
 
 
-class PCRState(State):
+class CRPState(State):
     def __init__(self, data: dict):
         # CRP level in mg/L (normal < 3.0)
         self._crp = data.get("crp", 1.0)
@@ -19,7 +19,7 @@ class PCRState(State):
         }
 
 
-class PCRSolver(Solver):
+class CRPSolver(Solver):
     def __init__(self,
                  baseline_production: float = 0.01,
                  inflammation_sensitivity: float = 0.2,
@@ -31,7 +31,7 @@ class PCRSolver(Solver):
         :param inflammation_sensitivity: How strongly inflammation affects CRP
         :param clearance_rate: Rate at which CRP is cleared
         """
-        self._state = PCRState({})
+        self._state = CRPState({})
         self.baseline_production = baseline_production
         self.inflammation_sensitivity = inflammation_sensitivity
         self.clearance_rate = clearance_rate
@@ -41,7 +41,7 @@ class PCRSolver(Solver):
         return self._state.state
 
     def solve(self, state: dict, dt: float) -> State:
-        ps = PCRState(state)
+        ps = CRPState(state)
         
         # Get infection level if available (affects inflammation)
         infection_level = state.get("infection_level", 0.0)
@@ -69,7 +69,7 @@ class PCRSolver(Solver):
             f"infection={infection_level:.1f}"
         )
 
-        return PCRState({
+        return CRPState({
             "crp": new_crp,
             "inflammation": new_inflammation
         })

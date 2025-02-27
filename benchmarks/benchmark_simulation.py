@@ -8,7 +8,6 @@ logging.disable(logging.CRITICAL)
 
 import time
 import concurrent.futures
-import os
 import sys
 from pathlib import Path
 import taichi as ti
@@ -29,12 +28,15 @@ from solvers.fever import FeverSolver
 from solvers.hemogram import HemogramSolver
 from solvers.lactate import LactateSolver
 from solvers.metabolytes import MetabolytesSolver 
-from solvers.pcr import PCRSolver
+from solvers.crp import CRPSolver
 from solvers.rhythm import RhythmSolver
 from solvers.sedation import SedationSolver
 
 from couplers.meds_vitals import MedsVitalsCoupler
 from couplers.fluid_electrolytes import FluidElectrolyteCoupler
+from couplers.fever_metabolic import FeverMetabolicCoupler
+from couplers.infection_hemogram import InfectionHemogramCoupler
+from couplers.coagulation_fluid import CoagulationFluidCoupler
 
 # Configuration for benchmark
 NUM_SIMULATIONS = 50      # Number of parallel simulation instances
@@ -49,14 +51,33 @@ SCENARIOS = [
         "actions": {
             "epinephrine": 5.0,
             "fluid_volume": 1000.0,
-            "tss_severity": 80.0
+            "tss_severity": 50.0,
+            "tissue_damage": 40.0
         }
     },
     {
         "name": "Renal failure",
         "actions": {
-            "blood_pressure": 60.0,
-            "kidney_function": 30.0
+            "blood_pressure": -30.0,  # Decrease blood pressure
+            "kidney_function": -60.0  # Decrease function by 60%
+        }
+    },
+    {
+        "name": "Hemorrhagic shock",
+        "actions": {
+            "platelets": 80.0,        # Reduced platelets
+            "bleeding_rate": 10.0,    # Active bleeding
+            "inr": 1.8,              # Coagulopathy
+            "fluid_volume": 1500.0    # Volume depletion
+        }
+    },
+    {
+        "name": "Severe infection",
+        "actions": {
+            "infection_level": 70.0,  # Severe infection
+            "temperature": 39.5,      # High fever
+            "wbc": 15.0,             # Elevated WBC
+            "crp": 180.0             # Elevated CRP
         }
     }
 ]
@@ -76,22 +97,32 @@ def create_simulation():
         HemogramSolver(),
         LactateSolver(),
         MetabolytesSolver(),
-        PCRSolver(),
+        CRPSolver(),
         RhythmSolver(),
         SedationSolver()
     ]
     
     couplers = [
         MedsVitalsCoupler(),
-        FluidElectrolyteCoupler()
+        FluidElectrolyteCoupler(),
+        FeverMetabolicCoupler(),
+        InfectionHemogramCoupler(),
+        CoagulationFluidCoupler()
     ]
     
     return Master(solvers=solvers, dt=1.0, couplers=couplers)
 
 def run_simulation(sim_id):
     """Run a single simulation instance."""
-    # Initialize Taichi without caching
-    ti.init(arch=ti.cpu, offline_cache=False)
+    # Initialize Taichi with GPU if available, otherwise use CPU
+    try:
+        ti.init(arch=ti.gpu, offline_cache=False)
+        if sim_id == 0:  # Only print this once to avoid spamming
+            print("Running with GPU acceleration")
+    except Exception:
+        ti.init(arch=ti.cpu, offline_cache=False)
+        if sim_id == 0:  # Only print this once to avoid spamming
+            print("Running with CPU (GPU not available)")
 
     sim = create_simulation()
     scenario_times = {}

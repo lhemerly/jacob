@@ -37,11 +37,49 @@ class Master:
             except AttributeError:
                 self.logger.error("Solver %s has no 'state' attribute", solver)
                 raise
+        
+        # Initialize default values for keys used by couplers
+        self._initialize_coupler_state()
 
         self.logger.info("Master initialized. Known keys: %s", list(self.state.keys()))
         
         # Verify couplers don't modify state owned exclusively by solvers
         self._validate_couplers()
+    
+    def _initialize_coupler_state(self):
+        """
+        Initialize state with default values for keys used by couplers that
+        might not be provided by solvers.
+        """
+        # Default values for common physiological parameters
+        default_values = {
+            # Hemogram parameters
+            "platelets": 250.0,        # 150-450 x10^9/L normal range
+            "wbc": 7.5,                # 4-11 x10^9/L normal range
+            "hemoglobin": 14.0,        # 12-16 g/dL normal
+            
+            # Coagulation parameters
+            "inr": 1.0,                # International Normalized Ratio (normal = 1.0)
+            "ptt": 30.0,               # Partial Thromboplastin Time (seconds)
+            "fibrinogen": 300.0,       # mg/dL (normal = 200-400)
+            "bleeding_rate": 0.0,      # arbitrary units
+            
+            # Infection/inflammation parameters
+            "infection_level": 0.0,    # arbitrary units
+            "crp": 5.0,                # C-reactive protein (mg/L)
+            
+            # Metabolic parameters
+            "metabolic_rate": 1.0,     # arbitrary units
+            
+            # Other parameters that might be needed by couplers
+            "oxygen_saturation": 98.0, # percentage
+        }
+        
+        # Only add default values if they don't already exist in state
+        for key, value in default_values.items():
+            if key not in self.state:
+                self.state[key] = value
+                self.logger.info(f"Added default value for {key}: {value}")
 
     def _validate_couplers(self):
         """
@@ -94,13 +132,16 @@ class Master:
         Perform state changes according to an actions dictionary.
         Example:
         actions = {"heart_rate": +5, "blood_pressure": -1.2}
+        If a key is missing, initialize it with the value rather than attempting
+        to increment a nonexistent value.
         """
         for key, value in actions.items():
             if key in self.state:
                 self.state[key] += value
             else:
-                self.logger.error("Key '%s' not found in global state", key)
-                raise KeyError(f"Invalid state key: {key}")
+                # Add the key with the specified value instead of throwing an error
+                self.state[key] = value
+                self.logger.info(f"Created new state key: {key} = {value}")
 
         self.logger.info("Actions applied: %s", actions)
         self.logger.info(str(self))

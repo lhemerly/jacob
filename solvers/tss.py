@@ -47,6 +47,9 @@ class TSSSolver(Solver):
         self.tissue_damage_rate = tissue_damage_rate
         self.tissue_healing_rate = tissue_healing_rate
         self.immune_response_rate = immune_response_rate
+        
+        # Flag to track if we need to sync other values with severity
+        self.severity_manually_set = False
 
     @property
     def state(self):
@@ -58,6 +61,39 @@ class TSSSolver(Solver):
         # Get relevant physiological parameters if available
         body_temp = state.get("temperature", 37.0)
         wbc_count = state.get("wbc", 7.5)
+        
+        # Check if tss_severity was manually set via actions
+        current_severity = ts.state["tss_severity"]
+        previous_severity = getattr(self, '_last_calculated_severity', 0.0)
+        
+        # Detect if severity was changed externally (via actions)
+        # by comparing with our last calculated value
+        severity_changed_externally = abs(current_severity - previous_severity) > 0.1 and hasattr(self, '_last_calculated_severity')
+        
+        # If severity was changed externally, adjust internal values to match the new severity
+        if severity_changed_externally:
+            # If severity was changed externally, adjust toxin and damage levels to match
+            # This ensures the solver honors external severity changes
+            target_toxin_damage = min(100, current_severity / 0.8 * 1.5)  # Rough inverse of severity calculation
+            
+            # Update toxin level and tissue damage to be consistent with the new severity
+            # while maintaining their relative proportions
+            if ts.state["toxin_level"] + ts.state["tissue_damage"] > 0:
+                proportion = ts.state["toxin_level"] / (ts.state["toxin_level"] + ts.state["tissue_damage"])
+            else:
+                proportion = 0.5  # Equal split if both are zero
+                
+            # Set new values while maintaining relative proportions
+            new_toxin = target_toxin_damage * proportion
+            new_damage = target_toxin_damage * (1 - proportion)
+            
+            # Set these as the starting points for this solve iteration
+            ts = TSSState({
+                "tss_severity": current_severity,
+                "tissue_damage": new_damage,
+                "toxin_level": new_toxin,
+                "immune_response": ts.state["immune_response"]
+            })
         
         # Update toxin levels
         # Production increases with tissue damage, clearance depends on immune response
@@ -96,6 +132,9 @@ class TSSSolver(Solver):
         new_severity = (new_toxin * 0.4 + 
                        new_damage * 0.4 + 
                        (100 - new_response) * 0.2)
+
+        # Save the calculated severity for next comparison
+        self._last_calculated_severity = new_severity
 
         logger.debug(
             f"TSSSolver: severity={new_severity:.1f}, "
