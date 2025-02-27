@@ -22,6 +22,21 @@ class CoagulationFluidCoupler(Coupler):
     def output_keys(self) -> list:
         return ["bleeding_rate", "fluid_volume", "hemoglobin"]
     
+    @property
+    def initial_state(self) -> dict:
+        """
+        Default initial values for state variables needed by this coupler.
+        """
+        return {
+            "platelets": 250.0,      # Normal platelet count (x10^9/L)
+            "inr": 1.0,              # Normal International Normalized Ratio
+            "ptt": 30.0,             # Normal Partial Thromboplastin Time (seconds)
+            "fibrinogen": 300.0,     # Normal fibrinogen level (mg/dL)
+            "bleeding_rate": 0.0,    # No bleeding at baseline (arbitrary units)
+            "fluid_volume": 2000.0,  # Normal intravascular volume (mL)
+            "hemoglobin": 14.0       # Normal hemoglobin level (g/dL)
+        }
+    
     @ti.kernel
     def _calculate_coagulation_effects(self, platelets: float, inr: float, ptt: float, 
                                       fibrinogen: float, current_bleeding: float, 

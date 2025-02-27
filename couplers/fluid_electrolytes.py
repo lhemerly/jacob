@@ -22,6 +22,17 @@ class FluidElectrolyteCoupler(Coupler):
     def output_keys(self) -> list:
         return ["sodium", "potassium"]
     
+    @property
+    def initial_state(self) -> dict:
+        """
+        Default initial values for state variables needed by this coupler.
+        """
+        return {
+            "fluid_volume": 2000.0,  # Standard fluid volume in ml
+            "sodium": 140.0,         # Normal sodium level in mEq/L
+            "potassium": 4.0,        # Normal potassium level in mEq/L
+        }
+    
     @ti.func
     def _is_valid_value(self, value: float) -> bool:
         """Check if a value is valid (not NaN or infinite)"""

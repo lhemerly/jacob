@@ -22,6 +22,19 @@ class InfectionHemogramCoupler(Coupler):
     def output_keys(self) -> list:
         return ["wbc", "platelets", "hemoglobin"]
     
+    @property
+    def initial_state(self) -> dict:
+        """
+        Default initial values for state variables needed by this coupler.
+        """
+        return {
+            "tss_severity": 0.0,     # No toxic shock syndrome at baseline
+            "infection_level": 0.0,  # No infection at baseline
+            "wbc": 7.5,              # Normal white blood cell count (×10^9/L)
+            "platelets": 250.0,      # Normal platelet count (×10^9/L)
+            "hemoglobin": 14.0       # Normal hemoglobin level (g/dL)
+        }
+    
     @ti.kernel
     def _calculate_infection_effects(self, tss_severity: float, infection_level: float, 
                                     wbc: float, platelets: float, hemoglobin: float) -> ti.math.vec3:

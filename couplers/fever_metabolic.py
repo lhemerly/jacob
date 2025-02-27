@@ -22,6 +22,18 @@ class FeverMetabolicCoupler(Coupler):
     def output_keys(self) -> list:
         return ["heart_rate", "oxygen_saturation", "metabolic_rate"]
     
+    @property
+    def initial_state(self) -> dict:
+        """
+        Default initial values for state variables needed by this coupler.
+        """
+        return {
+            "temperature": 37.0,       # Normal body temperature in °C
+            "heart_rate": 70.0,        # Normal resting heart rate in bpm
+            "oxygen_saturation": 98.0, # Normal oxygen saturation in %
+            "metabolic_rate": 1.0      # Baseline metabolic rate (unitless factor)
+        }
+    
     @ti.kernel
     def _calculate_fever_effects(self, temperature: float, heart_rate: float, 
                                 oxygen_saturation: float, metabolic_rate: float) -> ti.math.vec3:

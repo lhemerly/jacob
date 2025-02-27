@@ -107,8 +107,26 @@ The project includes:
 
 ## License
 
-[License information to be added]
+This project is licensed under the MIT License - see the [LICENSE.md](LICENSE.md) file for details.
 
 ## Contributing
 
-[Contribution guidelines to be added]
+We welcome contributions to the Medical Simulation Framework! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for detailed contributing guidelines.
+
+### Code Style
+
+We use industry-standard tools to maintain code quality:
+
+- **Ruff**: For linting and Python code formatting
+  ```bash
+  pip install ruff
+  ruff check .
+  ```
+
+- **Black**: For consistent code formatting
+  ```bash
+  pip install black
+  black .
+  ```
+
+Please ensure your code passes both ruff and black checks before submitting pull requests.

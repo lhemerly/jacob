@@ -67,6 +67,14 @@ class Coupler(ABC):
         """
         pass
         
+    @property
+    def initial_state(self) -> dict:
+        """
+        Default initial values for state variables needed by this coupler.
+        Override this in derived classes to provide default values.
+        """
+        return {}
+        
     @abstractmethod
     def couple(self, state: dict, dt: float) -> dict:
         """

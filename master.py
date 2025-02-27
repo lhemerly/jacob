@@ -38,7 +38,7 @@ class Master:
                 self.logger.error("Solver %s has no 'state' attribute", solver)
                 raise
         
-        # Initialize default values for keys used by couplers
+        # Initialize state with default values from couplers
         self._initialize_coupler_state()
 
         self.logger.info("Master initialized. Known keys: %s", list(self.state.keys()))
@@ -48,38 +48,18 @@ class Master:
     
     def _initialize_coupler_state(self):
         """
-        Initialize state with default values for keys used by couplers that
-        might not be provided by solvers.
+        Initialize state with default values from each coupler's initial_state.
+        Only adds values for keys that don't already exist in the state.
         """
-        # Default values for common physiological parameters
-        default_values = {
-            # Hemogram parameters
-            "platelets": 250.0,        # 150-450 x10^9/L normal range
-            "wbc": 7.5,                # 4-11 x10^9/L normal range
-            "hemoglobin": 14.0,        # 12-16 g/dL normal
+        for coupler in self.couplers:
+            # Get initial state values defined by each coupler
+            coupler_default_state = coupler.initial_state
             
-            # Coagulation parameters
-            "inr": 1.0,                # International Normalized Ratio (normal = 1.0)
-            "ptt": 30.0,               # Partial Thromboplastin Time (seconds)
-            "fibrinogen": 300.0,       # mg/dL (normal = 200-400)
-            "bleeding_rate": 0.0,      # arbitrary units
-            
-            # Infection/inflammation parameters
-            "infection_level": 0.0,    # arbitrary units
-            "crp": 5.0,                # C-reactive protein (mg/L)
-            
-            # Metabolic parameters
-            "metabolic_rate": 1.0,     # arbitrary units
-            
-            # Other parameters that might be needed by couplers
-            "oxygen_saturation": 98.0, # percentage
-        }
-        
-        # Only add default values if they don't already exist in state
-        for key, value in default_values.items():
-            if key not in self.state:
-                self.state[key] = value
-                self.logger.info(f"Added default value for {key}: {value}")
+            # Only add default values if they don't already exist in state
+            for key, value in coupler_default_state.items():
+                if key not in self.state:
+                    self.state[key] = value
+                    self.logger.info(f"Added default value for {key}: {value} from {coupler.__class__.__name__}")
 
     def _validate_couplers(self):
         """

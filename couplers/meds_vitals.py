@@ -24,6 +24,18 @@ class MedsVitalsCoupler(Coupler):
         # Keys we'll potentially modify based on interactions
         return ["heart_rate", "blood_pressure"]
     
+    @property
+    def initial_state(self) -> dict:
+        """
+        Default initial values for state variables needed by this coupler.
+        """
+        return {
+            "epinephrine": 0.0,       # No epinephrine at baseline
+            "heart_rate": 70.0,       # Normal resting heart rate in bpm
+            "blood_pressure": 120.0,  # Normal systolic blood pressure in mmHg
+            "fluid_volume": 2000.0    # Normal intravascular volume in ml
+        }
+    
     @ti.kernel
     def _calculate_effects(self, epinephrine: float, fluid_volume: float) -> ti.math.vec2:
         """
