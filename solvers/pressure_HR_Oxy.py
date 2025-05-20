@@ -371,7 +371,7 @@ class PressureHROxySolver(Solver):
             f"  HR: {hr_old:.1f} -> {hr_new:.1f}, dHR/dt={dhr_dt:.3f}, Epi={epi:.2f}\n"
             f"  PAO2: {pao2:.2f} mmHg (FiO2: {current_fio2:.2f}, RR: {current_rr:.1f}, TV: {current_tv:.2f}L)\n"
             f"  O2 Sat: {oxy_old:.1f}% -> {oxy_new:.1f}%\n"
-            f"  O2 Debt: {debt_old:.2f} -> {debt_new:.2f}"
+            f"  O2 Debt: {debt_old:.2f} -> {debt_new:.2f}\n"
             f"  EDV: {edv_old:.2f} -> {edv_new:.2f}, dEDV/dt={dedv_dt:.3f}, Stroke Volume: {stroke_volume_actual:.2f}"
         )
 
