@@ -115,7 +115,6 @@ class PressureHROxySolver(Solver):
         oxy_debt_accum_factor: float = 0.1,
     ):
         """
-        # :param stroke_volume: (mL/beat) For CO = HR * stroke_volume (very simplified). # Removed
         :param base_stroke_volume: (mL) Baseline for stroke volume calculation.
         :param k_preload: (mL/mL) Factor for EDV influence on stroke volume (Frank-Starling like effect).
         :param k_afterload: (mL/mmHg) Factor for MAP influence on stroke volume (effect of afterload).
