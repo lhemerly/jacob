@@ -1,4 +1,5 @@
 import logging
+import math
 from classes import Solver, State
 
 logger = logging.getLogger(__name__)
@@ -24,6 +25,10 @@ class PressureHROxyState(State):
         self._oxy = data.get("oxy_saturation", 98.0)  # Percent
         # We'll track oxygen debt as well, defaulting to 0.
         self._oxy_debt = data.get("oxygen_debt", 0.0)
+        # Respiratory parameters
+        self._respiratory_rate = data.get("respiratory_rate", 12.0)  # Breaths per minute
+        self._tidal_volume = data.get("tidal_volume", 0.5)  # Liters
+        self._fio2 = data.get("fio2", 0.21)  # Fraction of inspired oxygen
     
     def _calculate_map(self):
         """Calculate Mean Arterial Pressure from systolic and diastolic values"""
@@ -41,6 +46,9 @@ class PressureHROxyState(State):
             "heart_rate": self._hr,
             "oxy_saturation": self._oxy,
             "oxygen_debt": self._oxy_debt,
+            "respiratory_rate": self._respiratory_rate,
+            "tidal_volume": self._tidal_volume,
+            "fio2": self._fio2,
         }
 
     def __iter__(self):
@@ -104,6 +112,10 @@ class PressureHROxySolver(Solver):
         # Oxygen debt related:
         optimal_oxy: float = 95.0,
         oxy_debt_accum_factor: float = 0.1,
+        # Respiratory defaults
+        default_respiratory_rate: float = 12.0,  # breaths/min
+        default_tidal_volume: float = 0.5,  # Liters
+        default_fio2: float = 0.21,  # Fraction of inspired O2 (21%)
     ):
         """
         :param stroke_volume: (mL/beat) For CO = HR * stroke_volume (very simplified).
@@ -123,6 +135,9 @@ class PressureHROxySolver(Solver):
         :param initial_state: Initial state object.
         :param optimal_oxy: O2 threshold above which no oxygen debt accumulates.
         :param oxy_debt_accum_factor: scaling factor for how fast oxygen debt accumulates below optimal O2.
+        :param default_respiratory_rate: Default respiratory rate in breaths/min.
+        :param default_tidal_volume: Default tidal volume in Liters.
+        :param default_fio2: Default fraction of inspired oxygen (e.g., 0.21 for room air).
         """
         # Store parameters
         self.stroke_volume = stroke_volume
@@ -148,6 +163,11 @@ class PressureHROxySolver(Solver):
         self.optimal_oxy = optimal_oxy
         self.oxy_debt_accum_factor = oxy_debt_accum_factor
 
+        # Store respiratory default parameters
+        self.default_respiratory_rate = default_respiratory_rate
+        self.default_tidal_volume = default_tidal_volume
+        self.default_fio2 = default_fio2
+
     @property
     def state(self):
         # Return the dictionary from the state object, not the state object itself
@@ -156,6 +176,35 @@ class PressureHROxySolver(Solver):
     @state.setter
     def state(self, state):
         self._state = state
+
+    def _calculate_alveolar_oxygen(self, fio2, patm_mmHg=760, ph2o_mmHg=47, rq=0.8):
+        """
+        Calculates the partial pressure of oxygen in the alveoli (PAO2)
+        using the simplified alveolar gas equation.
+        Assumes a fixed PaCO2 of 40 mmHg.
+        """
+        assumed_pa_co2 = 40.0
+        pao2 = (fio2 * (patm_mmHg - ph2o_mmHg)) - (assumed_pa_co2 / rq)
+        return pao2
+
+    def _calculate_spO2(self, pao2, hill_k=26.0, hill_n=2.7):
+        """
+        Calculates estimated SpO2 (%) using the Hill equation.
+        PaO2 is the partial pressure of alveolar oxygen.
+        K is the P50 value (PaO2 at 50% saturation).
+        n is the Hill coefficient.
+        """
+        if pao2 < 0: # PAO2 can be negative if FiO2 is very low, leading to math domain error
+            return 0.0
+        try:
+            pao2_n = math.pow(pao2, hill_n)
+            k_n = math.pow(hill_k, hill_n)
+            spo2 = (pao2_n / (pao2_n + k_n)) * 100.0
+        except ValueError: # Should not happen with pao2 < 0 check, but as a safeguard
+            spo2 = 0.0
+        
+        # Clamp SpO2 between 0 and 100
+        return max(0.0, min(100.0, spo2))
 
     def solve(self, state: dict, dt: float) -> State:
         # Convert to typed state object
@@ -166,6 +215,11 @@ class PressureHROxySolver(Solver):
         hr_old = ps.state["heart_rate"]
         oxy_old = ps.state["oxy_saturation"]
         debt_old = ps.state["oxygen_debt"]
+        # Retrieve respiratory parameters from state or use defaults
+        current_fio2 = state.get('fio2', self.default_fio2)
+        current_rr = state.get('respiratory_rate', self.default_respiratory_rate)
+        current_tv = state.get('tidal_volume', self.default_tidal_volume)
+
 
         # Retrieve epinephrine if it exists
         epi = 0.0
@@ -221,16 +275,16 @@ class PressureHROxySolver(Solver):
 
         """
         3) Oxygen saturation update
-           If MAP < 60, we drop O2. If MAP >= 60, we recover.
+           Uses alveolar oxygen partial pressure (PAO2) and Hill equation.
         """
-        map_threshold = 60.0
-        if map_new >= map_threshold:
-            oxy_new = (
-                oxy_old + self.oxy_recovery_rate * (self.max_oxy - oxy_old) * dt_seconds
-            )
-        else:
-            drop_factor = 1.0 + max(0, (map_threshold - map_new) / map_threshold)
-            oxy_new = oxy_old - (self.oxy_drop_rate * drop_factor) * dt_seconds
+        # Calculate PAO2
+        pao2 = self._calculate_alveolar_oxygen(fio2=current_fio2)
+
+        # Calculate SpO2 based on PAO2
+        oxy_new = self._calculate_spO2(pao2)
+        
+        # Apply solver-specific min/max clamping for SpO2
+        # _calculate_spO2 clamps between 0-100, this allows for narrower operational range if needed.
         if oxy_new < self.min_oxy:
             oxy_new = self.min_oxy
         elif oxy_new > self.max_oxy:
@@ -253,7 +307,8 @@ class PressureHROxySolver(Solver):
             f"  Diastolic BP: {diastolic_old:.2f} -> {diastolic_new:.2f}\n"
             f"  MAP: {map_old:.2f} -> {map_new:.2f}, dMAP/dt={dmap_dt:.3f}\n"
             f"  HR: {hr_old:.1f} -> {hr_new:.1f}, dHR/dt={dhr_dt:.3f}, Epi={epi:.2f}\n"
-            f"  O2: {oxy_old:.1f} -> {oxy_new:.1f}\n"
+            f"  PAO2: {pao2:.2f} mmHg (FiO2: {current_fio2:.2f}, RR: {current_rr:.1f}, TV: {current_tv:.2f}L)\n"
+            f"  O2 Sat: {oxy_old:.1f}% -> {oxy_new:.1f}%\n"
             f"  O2 Debt: {debt_old:.2f} -> {debt_new:.2f}"
         )
 
