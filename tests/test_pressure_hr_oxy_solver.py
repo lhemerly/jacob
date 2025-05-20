@@ -299,34 +299,30 @@ class TestPressureHROxySolver(unittest.TestCase):
         base_hr = 60.0
         base_diastolic = 70.0 # Keep DBP somewhat stable initially for isolating SBP effect
 
+        def _run_scenario(edv_offset):
+            edv = solver.target_edv + edv_offset
+            initial_data = {
+                "systolic_bp": 110.0,
+                "diastolic_bp": base_diastolic,
+                "heart_rate": base_hr,
+                "end_diastolic_volume": edv,
+                "oxy_saturation": 98.0,
+            }
+            state = solver.solve(initial_data.copy(), dt).state
+            return state["systolic_bp"], state["diastolic_bp"], state
+
         # Scenario 1: Baseline SV
-        edv1 = solver.target_edv # 120 mL
-        # SV1 = base_sv (70) - k_afterload*(map_at_70_dbp - map_setpoint)
-        # Assuming SBP around 110 for DBP 70, MAP = (110+140)/3 = 250/3 = 83.33
-        # SV1 = 70 - 0.3*(83.33-90) = 70 - 0.3*(-6.67) = 70 + 2 = 72
-        initial_data1 = {"systolic_bp": 110.0, "diastolic_bp": base_diastolic, "heart_rate": base_hr, "end_diastolic_volume": edv1, "oxy_saturation": 98.0}
-        state1 = solver.solve(initial_data1.copy(), dt).state
-        sbp1, dbp1 = state1["systolic_bp"], state1["diastolic_bp"]
+        sbp1, dbp1, state1 = _run_scenario(0)
 
         # Scenario 2: Higher SV
-        edv2 = solver.target_edv + 20 # 140 mL
-        # SV2 approx SV1 + k_preload*20 = 72 + 0.5*20 = 72 + 10 = 82
-        initial_data2 = {"systolic_bp": 110.0, "diastolic_bp": base_diastolic, "heart_rate": base_hr, "end_diastolic_volume": edv2, "oxy_saturation": 98.0}
-        state2 = solver.solve(initial_data2.copy(), dt).state
-        sbp2, dbp2 = state2["systolic_bp"], state2["diastolic_bp"]
-        
+        sbp2, dbp2, state2 = _run_scenario(20)
         self.assertTrue(sbp2 > sbp1, "SBP with higher SV should be greater than SBP with baseline SV")
-        self.assertAlmostEqual(dbp2, dbp1, delta=2.0, "DBP should remain relatively unchanged with SV change") # DBP might change a bit due to SBP link
+        self.assertAlmostEqual(dbp2, dbp1, delta=2.0, "DBP should remain relatively unchanged with SV change")
         self.assertTrue(state1["systolic_bp"] > state1["diastolic_bp"])
         self.assertTrue(state2["systolic_bp"] > state2["diastolic_bp"])
 
         # Scenario 3: Lower SV
-        edv3 = solver.target_edv - 20 # 100 mL
-        # SV3 approx SV1 - k_preload*20 = 72 - 10 = 62
-        initial_data3 = {"systolic_bp": 110.0, "diastolic_bp": base_diastolic, "heart_rate": base_hr, "end_diastolic_volume": edv3, "oxy_saturation": 98.0}
-        state3 = solver.solve(initial_data3.copy(), dt).state
-        sbp3, dbp3 = state3["systolic_bp"], state3["diastolic_bp"]
-
+        sbp3, dbp3, state3 = _run_scenario(-20)
         self.assertTrue(sbp3 < sbp1, "SBP with lower SV should be less than SBP with baseline SV")
         self.assertAlmostEqual(dbp3, dbp1, delta=2.0, "DBP should remain relatively unchanged with SV change")
         self.assertTrue(state3["systolic_bp"] > state3["diastolic_bp"])
