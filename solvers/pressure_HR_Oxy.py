@@ -25,10 +25,12 @@ class PressureHROxyState(State):
         self._oxy = data.get("oxy_saturation", 98.0)  # Percent
         # We'll track oxygen debt as well, defaulting to 0.
         self._oxy_debt = data.get("oxygen_debt", 0.0)
+
         # Respiratory parameters
         self._respiratory_rate = data.get("respiratory_rate", 12.0)  # Breaths per minute
         self._tidal_volume = data.get("tidal_volume", 0.5)  # Liters
         self._fio2 = data.get("fio2", 0.21)  # Fraction of inspired oxygen
+        self._edv = data.get("end_diastolic_volume", 120.0)  # End-diastolic volume in mL
     
     def _calculate_map(self):
         """Calculate Mean Arterial Pressure from systolic and diastolic values"""
@@ -49,6 +51,8 @@ class PressureHROxyState(State):
             "respiratory_rate": self._respiratory_rate,
             "tidal_volume": self._tidal_volume,
             "fio2": self._fio2,
+            "end_diastolic_volume": self._edv,
+
         }
 
     def __iter__(self):
@@ -91,7 +95,14 @@ class PressureHROxySolver(Solver):
 
     def __init__(
         self,
-        stroke_volume: float = 1.0,
+        # stroke_volume: float = 1.0, # Removed
+        base_stroke_volume: float = 70.0, # mL
+        k_preload: float = 0.5, # mL/mL
+        k_afterload: float = 0.3, # mL/mmHg
+        target_edv: float = 120.0, # mL
+        edv_recovery_rate: float = 0.1,
+        max_stroke_volume: float = 150.0, # mL
+        filling_ratio_factor: float = 1.0, # Factor for stroke volume replenishment
         compliance: float = 1.0,
         systemic_vascular_resistance: float = 1.0,
         baroreflex_gain: float = 0.1,
@@ -118,7 +129,13 @@ class PressureHROxySolver(Solver):
         default_fio2: float = 0.21,  # Fraction of inspired O2 (21%)
     ):
         """
-        :param stroke_volume: (mL/beat) For CO = HR * stroke_volume (very simplified).
+        :param base_stroke_volume: (mL) Baseline for stroke volume calculation.
+        :param k_preload: (mL/mL) Factor for EDV influence on stroke volume (Frank-Starling like effect).
+        :param k_afterload: (mL/mmHg) Factor for MAP influence on stroke volume (effect of afterload).
+        :param target_edv: (mL) The target or optimal end-diastolic volume.
+        :param edv_recovery_rate: (1/s) Rate constant determining how quickly EDV returns to `target_edv` (e.g., 0.1 means 10% of the difference is recovered per second).
+        :param max_stroke_volume: (mL) Maximum physiological stroke volume.
+        :param filling_ratio_factor: Factor determining how much of the ejected stroke volume is replenished each cycle.
         :param compliance: Arterial compliance in windkessel eq.
         :param systemic_vascular_resistance: The effective afterload.
         :param baroreflex_gain: How strongly HR is adjusted based on difference from map_setpoint.
@@ -140,7 +157,14 @@ class PressureHROxySolver(Solver):
         :param default_fio2: Default fraction of inspired oxygen (e.g., 0.21 for room air).
         """
         # Store parameters
-        self.stroke_volume = stroke_volume
+        # self.stroke_volume = stroke_volume # Removed
+        self.base_stroke_volume = base_stroke_volume
+        self.k_preload = k_preload
+        self.k_afterload = k_afterload
+        self.target_edv = target_edv
+        self.edv_recovery_rate = edv_recovery_rate
+        self.max_stroke_volume = max_stroke_volume
+        self.filling_ratio_factor = filling_ratio_factor
         self.compliance = compliance
         self.svr = systemic_vascular_resistance
         self.baro_gain = baroreflex_gain
@@ -157,7 +181,7 @@ class PressureHROxySolver(Solver):
         self.min_diastolic = min_diastolic
         self.max_diastolic = max_diastolic
         self.dt_unit_in_seconds = dt_unit_in_seconds
-        self._state = initial_state
+        # self._state = initial_state # Modified below
 
         # Oxygen debt parameters
         self.optimal_oxy = optimal_oxy
@@ -167,6 +191,16 @@ class PressureHROxySolver(Solver):
         self.default_respiratory_rate = default_respiratory_rate
         self.default_tidal_volume = default_tidal_volume
         self.default_fio2 = default_fio2
+
+        if not isinstance(initial_state, PressureHROxyState):
+            # if initial_state is a dict, use it, otherwise use empty dict for defaults
+            init_data = initial_state if isinstance(initial_state, dict) else {}
+            # Ensure EDV is part of this initial data if not already
+            if "end_diastolic_volume" not in init_data:
+                init_data["end_diastolic_volume"] = self.target_edv # Or another appropriate default like 120.0
+            self._state = PressureHROxyState(init_data)
+        else:
+            self._state = initial_state
 
     @property
     def state(self):
@@ -219,7 +253,7 @@ class PressureHROxySolver(Solver):
         current_fio2 = state.get('fio2', self.default_fio2)
         current_rr = state.get('respiratory_rate', self.default_respiratory_rate)
         current_tv = state.get('tidal_volume', self.default_tidal_volume)
-
+        edv_old = ps.state["end_diastolic_volume"]
 
         # Retrieve epinephrine if it exists
         epi = 0.0
@@ -233,7 +267,14 @@ class PressureHROxySolver(Solver):
         1) Blood Pressure update (Windkessel-like with separate systolic and diastolic components)
            First calculate change in MAP
         """
-        cardiac_output = hr_old * self.stroke_volume  # simplistic
+        # Calculate initial stroke volume based on EDV and MAP
+        stroke_volume_calculated = self.base_stroke_volume + \
+                                   self.k_preload * (edv_old - self.target_edv) - \
+                                   self.k_afterload * (map_old - self.map_setpoint)
+        # Clamp stroke volume to physiological limits
+        stroke_volume_actual = max(5.0, min(stroke_volume_calculated, self.max_stroke_volume))
+
+        cardiac_output = (hr_old / 60) * stroke_volume_actual # Convert HR to BPS for consistent time units
         dmap_dt = (cardiac_output - (map_old / self.svr)) / self.compliance
         
         # Add epinephrine effect on blood pressure (vasoconstriction)
@@ -301,6 +342,27 @@ class PressureHROxySolver(Solver):
                 (self.optimal_oxy - oxy_new) * self.oxy_debt_accum_factor * dt_seconds
             )
 
+        """
+        5) End-Diastolic Volume update
+        """
+        # Effect of stroke volume not being fully replenished or being over-replenished per beat, scaled to per second
+        # hr_old is in BPM, so divide by 60 to get BPS (beats per second)
+        heart_rate_bps = hr_old / 60.0 if hr_old > 0 else 0 # Avoid division by zero if hr_old is 0
+        net_volume_change_from_beats_per_sec = heart_rate_bps * stroke_volume_actual * (self.filling_ratio_factor - 1.0)
+
+        # Effect of EDV regressing towards its target value (rate-based)
+        volume_change_from_recovery_per_sec = self.edv_recovery_rate * (self.target_edv - edv_old)
+
+        # Total rate of change for EDV
+        dedv_dt = net_volume_change_from_beats_per_sec + volume_change_from_recovery_per_sec
+
+        # Update EDV
+        edv_new = edv_old + dedv_dt * dt_seconds
+
+        # Ensure EDV does not become unrealistically low (e.g., less than a minimum residual volume)
+        edv_new = max(30.0, edv_new) # Clamp EDV, e.g., min 30mL (ventricular residual volume)
+
+
         logger.debug(
             f"PressureHROxySolver:\n"
             f"  Systolic BP: {systolic_old:.2f} -> {systolic_new:.2f}\n"
@@ -310,6 +372,7 @@ class PressureHROxySolver(Solver):
             f"  PAO2: {pao2:.2f} mmHg (FiO2: {current_fio2:.2f}, RR: {current_rr:.1f}, TV: {current_tv:.2f}L)\n"
             f"  O2 Sat: {oxy_old:.1f}% -> {oxy_new:.1f}%\n"
             f"  O2 Debt: {debt_old:.2f} -> {debt_new:.2f}"
+            f"  EDV: {edv_old:.2f} -> {edv_new:.2f}, dEDV/dt={dedv_dt:.3f}, Stroke Volume: {stroke_volume_actual:.2f}"
         )
 
         return PressureHROxyState(
@@ -319,5 +382,6 @@ class PressureHROxySolver(Solver):
                 "heart_rate": hr_new,
                 "oxy_saturation": oxy_new,
                 "oxygen_debt": debt_new,
+                "end_diastolic_volume": edv_new,
             }
         )
