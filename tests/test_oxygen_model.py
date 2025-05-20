@@ -73,7 +73,7 @@ class TestSpO2Calculation(unittest.TestCase):
     def test_spo2_with_high_pao2_600(self):
         pao2 = 600.0
         expected = self._expected_spo2(pao2) # Approx 99.99... should be clamped or very close to 100
-        #The Hill equation will give values very close to 100 but not exactly 100.
+        # The Hill equation will give values very close to 100 but not exactly 100.
         #The implementation clamps it.
         self.assertAlmostEqual(self.solver._calculate_spO2(pao2), 100.0, places=2)
 
