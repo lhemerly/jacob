@@ -220,7 +220,7 @@ class PressureHROxySolver(Solver):
         # Clamp stroke volume to physiological limits
         stroke_volume_actual = max(5.0, min(stroke_volume_calculated, self.max_stroke_volume))
 
-        cardiac_output = hr_old * stroke_volume_actual # Use clamped SV
+        cardiac_output = (hr_old / 60) * stroke_volume_actual # Convert HR to BPS for consistent time units
         dmap_dt = (cardiac_output - (map_old / self.svr)) / self.compliance
         
         # Add epinephrine effect on blood pressure (vasoconstriction)
