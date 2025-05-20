@@ -107,7 +107,8 @@ class PressureHROxySolver(Solver):
         systemic_vascular_resistance: float = 1.0,
         baroreflex_gain: float = 0.1,
         map_setpoint: float = 90.0,
-        pulse_pressure_factor: float = 0.4,  # Factor to determine pulse pressure
+        sv_to_systolic_factor: float = 0.5,  # unit: mmHg/mL
+        svr_to_diastolic_factor: float = 50.0,  # unit: mmHg/SVR unit
         oxy_recovery_rate: float = 0.01,
         oxy_drop_rate: float = 0.02,
         epi_hr_factor: float = 0.5,
@@ -140,7 +141,8 @@ class PressureHROxySolver(Solver):
         :param systemic_vascular_resistance: The effective afterload.
         :param baroreflex_gain: How strongly HR is adjusted based on difference from map_setpoint.
         :param map_setpoint: The target MAP for baroreflex.
-        :param pulse_pressure_factor: Determines ratio of systolic/diastolic changes.
+        :param sv_to_systolic_factor: Factor converting stroke volume to systolic pressure changes.
+        :param svr_to_diastolic_factor: Factor converting SVR to diastolic pressure changes.
         :param oxy_recovery_rate: Rate at which O2 sat returns to normal if perfusion is adequate.
         :param oxy_drop_rate: Rate at which O2 sat drops if MAP is too low.
         :param epi_hr_factor: How strongly epinephrine from global state raises HR.
@@ -169,7 +171,8 @@ class PressureHROxySolver(Solver):
         self.svr = systemic_vascular_resistance
         self.baro_gain = baroreflex_gain
         self.map_setpoint = map_setpoint
-        self.pulse_pressure_factor = pulse_pressure_factor
+        self.sv_to_systolic_factor = sv_to_systolic_factor
+        self.svr_to_diastolic_factor = svr_to_diastolic_factor
         self.oxy_recovery_rate = oxy_recovery_rate
         self.oxy_drop_rate = oxy_drop_rate
         self.epi_hr_factor = epi_hr_factor
@@ -274,33 +277,43 @@ class PressureHROxySolver(Solver):
         # Clamp stroke volume to physiological limits
         stroke_volume_actual = max(5.0, min(stroke_volume_calculated, self.max_stroke_volume))
 
-        cardiac_output = (hr_old / 60) * stroke_volume_actual # Convert HR to BPS for consistent time units
-        dmap_dt = (cardiac_output - (map_old / self.svr)) / self.compliance
-        
-        # Add epinephrine effect on blood pressure (vasoconstriction)
-        dmap_dt += epi * self.epi_bp_factor
-        
-        # Calculate base MAP change
-        map_change = dmap_dt * dt_seconds
-        
-        # Distribute the change between systolic and diastolic
-        # Systolic changes more than diastolic based on pulse_pressure_factor
-        systolic_change = map_change * (1 + self.pulse_pressure_factor)
-        diastolic_change = map_change * (1 - self.pulse_pressure_factor)
-        
-        # Apply changes
-        systolic_new = systolic_old + systolic_change
-        diastolic_new = diastolic_old + diastolic_change
-        
-        # Enforce limits on systolic and diastolic
+        # Systolic Pressure Calculation
+        systolic_target = diastolic_old + self.sv_to_systolic_factor * stroke_volume_actual
+        systolic_change_potential = systolic_target - systolic_old
+        systolic_change_epi = (self.epi_bp_factor / 2) * epi 
+        systolic_rate_of_change = systolic_change_potential / (self.compliance * 5.0) # Factor 5 is for tuning
+        systolic_new = systolic_old + (systolic_rate_of_change + systolic_change_epi) * dt_seconds
+
+        # Diastolic Pressure Calculation
+        diastolic_target = self.base_diastolic_reference + self.svr_to_diastolic_factor * (self.svr - 1.0) # Assuming SVR default/baseline is 1.0
+        diastolic_change_potential = diastolic_target - diastolic_old
+        diastolic_change_epi = (self.epi_bp_factor / 2) * epi
+        diastolic_rate_of_change = diastolic_change_potential / (self.compliance * 5.0) # Factor 5 is for tuning
+        diastolic_new = diastolic_old + (diastolic_rate_of_change + diastolic_change_epi) * dt_seconds
+
+        # Apply constraints and recalculate MAP
         systolic_new = max(min(systolic_new, self.max_systolic), self.min_systolic)
         diastolic_new = max(min(diastolic_new, self.max_diastolic), self.min_diastolic)
         
-        # Ensure diastolic is always less than systolic
-        if diastolic_new >= systolic_new:
-            diastolic_new = systolic_new - 10  # Minimum 10 mmHg pulse pressure
+        min_pulse_pressure = 10.0
+        if (systolic_new - diastolic_new) < min_pulse_pressure:
+            deficit = min_pulse_pressure - (systolic_new - diastolic_new)
+            adjust_sbp = deficit / 2.0
+            adjust_dbp = -deficit / 2.0
+
+            temp_sbp = systolic_new + adjust_sbp
+            temp_dbp = diastolic_new + adjust_dbp
+
+            systolic_new = max(min(temp_sbp, self.max_systolic), self.min_systolic)
+            diastolic_new = max(min(temp_dbp, self.max_diastolic), self.min_diastolic)
+
+            if (systolic_new - diastolic_new) < min_pulse_pressure:
+                diastolic_new = systolic_new - min_pulse_pressure
+                diastolic_new = max(min(diastolic_new, self.max_diastolic), self.min_diastolic)
+                if (systolic_new - diastolic_new) < min_pulse_pressure:
+                    systolic_new = diastolic_new + min_pulse_pressure
+                    systolic_new = max(min(systolic_new, self.max_systolic), self.min_systolic)
         
-        # Calculate new MAP based on new systolic and diastolic
         map_new = (systolic_new + 2 * diastolic_new) / 3
 
         """
@@ -365,9 +378,9 @@ class PressureHROxySolver(Solver):
 
         logger.debug(
             f"PressureHROxySolver:\n"
-            f"  Systolic BP: {systolic_old:.2f} -> {systolic_new:.2f}\n"
-            f"  Diastolic BP: {diastolic_old:.2f} -> {diastolic_new:.2f}\n"
-            f"  MAP: {map_old:.2f} -> {map_new:.2f}, dMAP/dt={dmap_dt:.3f}\n"
+            f"  Systolic BP: {systolic_old:.2f} -> {systolic_new:.2f} (Target: {systolic_target:.2f})\n"
+            f"  Diastolic BP: {diastolic_old:.2f} -> {diastolic_new:.2f} (Target: {diastolic_target:.2f})\n"
+            f"  MAP: {map_old:.2f} -> {map_new:.2f}\n"
             f"  HR: {hr_old:.1f} -> {hr_new:.1f}, dHR/dt={dhr_dt:.3f}, Epi={epi:.2f}\n"
             f"  PAO2: {pao2:.2f} mmHg (FiO2: {current_fio2:.2f}, RR: {current_rr:.1f}, TV: {current_tv:.2f}L)\n"
             f"  O2 Sat: {oxy_old:.1f}% -> {oxy_new:.1f}%\n"
