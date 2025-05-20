@@ -285,8 +285,7 @@ class PressureHROxySolver(Solver):
         systolic_new = systolic_old + (systolic_rate_of_change + systolic_change_epi) * dt_seconds
 
         # Diastolic Pressure Calculation
-        base_diastolic_reference = 70.0 # Could be a parameter
-        diastolic_target = base_diastolic_reference + self.svr_to_diastolic_factor * (self.svr - 1.0) # Assuming SVR default/baseline is 1.0
+        diastolic_target = self.base_diastolic_reference + self.svr_to_diastolic_factor * (self.svr - 1.0) # Assuming SVR default/baseline is 1.0
         diastolic_change_potential = diastolic_target - diastolic_old
         diastolic_change_epi = (self.epi_bp_factor / 2) * epi
         diastolic_rate_of_change = diastolic_change_potential / (self.compliance * 5.0) # Factor 5 is for tuning
